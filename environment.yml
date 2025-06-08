@@ -1,0 +1,5 @@
+name: grav-sim
+channels:
+  - defaults
+dependencies:
+  - rust
