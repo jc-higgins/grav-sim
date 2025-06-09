@@ -26,7 +26,7 @@ impl ApplicationHandler<State> for App {
         #[allow(unused_mut)]
         let mut window_attributes: WindowAttributes = Window::default_attributes();
 
-        window_attributes = window_attributes.with_title("Test Window!");
+        window_attributes = window_attributes.with_title("Learning WGPU!");
         
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
         self.state = Some(pollster::block_on(State::new(window)).unwrap());
