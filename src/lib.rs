@@ -1,4 +1,12 @@
 #[cfg(target_arch = "wasm32")]
+use tracing_subscriber::fmt::format::Pretty;
+#[cfg(target_arch = "wasm32")]
+use tracing_subscriber::fmt::time::UtcTime;
+#[cfg(target_arch = "wasm32")]
+use tracing_subscriber::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use tracing_web::{performance_layer, MakeConsoleWriter};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 pub mod app;
@@ -9,7 +17,7 @@ pub use state::State;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 
-
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::<State>::with_user_event().build().unwrap();
 
@@ -25,3 +33,13 @@ pub fn run() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn run_web() -> Result<(), wasm_bindgen::JsValue> {
+    console_error_panic_hook::set_once();
+    run().unwrap_throw();
+
+    Ok(())
+}
+ 
