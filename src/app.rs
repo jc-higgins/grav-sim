@@ -1,5 +1,7 @@
 use std::sync::Arc;
 use pollster;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::{EventLoop, ActiveEventLoop};
@@ -10,6 +12,8 @@ use crate::state::State;
 
 
 pub struct App {
+    #[cfg(target_arch = "wasm32")]
+    proxy: Option<winit::event_loop::EventLoopProxy<State>>,
     pub state: Option<State>,
 }
 

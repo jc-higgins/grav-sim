@@ -5,6 +5,8 @@ use winit::{
     window::Window,
 };
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 pub struct State {
     pub window: Arc<Window>,
