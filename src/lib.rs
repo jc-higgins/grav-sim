@@ -4,10 +4,9 @@ pub mod app;
 pub mod state;
 
 pub use app::App;
-pub use state::State;
+pub use state::{State, Body};
 
-use winit::event_loop::{ControlFlow, ActiveEventLoop};
-use winit::window::Window;
+use winit::event_loop::{EventLoop};
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
@@ -23,37 +22,8 @@ pub fn run() {
         }
     }
 
-    let event_loop = ActiveEventLoop::<State>::with_user_event().build().unwrap();
-    // Poll controlflow for games etc
-    // event_loop.set_control_flow(ControlFLow::Poll);
-    event_loop.set_control_flow(ControlFlow::Wait);
-
-    let window_attributes = Window::default_attributes().with_title("A fantastic window.");
-    let window: Option<winit::window::Window> = Some(event_loop.create_window(window_attributes).unwrap());
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Winit prevents sizing with CSS, so we have to set
-        // the size manually when on web.
-        use winit::dpi::PhysicalSize;
-        window.set_inner_size(PhysicalSize::new(450, 400));
-
-        use winit::platform::web::WindowExtWebSys;
-        web_sys::window()
-            .and_then(|win| win.document())
-            .and_then(|doc| {
-                let dst = doc.body()?; //.get_element_by_id("wasm-example")?;
-                let canvas =
-                    web_sys::Element::from(window.canvas());
-                dst.append_child(&canvas).ok()?;
-                Some(())
-            })
-            .expect(
-                "Couldn't append canvas to document body.",
-            );
-    }
-
-    let mut app = App::new(&event_loop);
+    let event_loop = EventLoop::<State>::with_user_event().build().unwrap();
+    let mut app = App::new();
     let _ = event_loop.run_app(&mut app);
 }
  
