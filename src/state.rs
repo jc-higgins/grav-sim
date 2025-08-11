@@ -103,8 +103,8 @@ impl<'a> State<'a> {
         let bodies = vec![
             Body::new(100.0, (-0.8, 0.0), (0.0, 1.0)).unwrap(),
             Body::new(100.0, (0.8, 0.0), (0.0, -1.0)).unwrap(),
-            Body::new(100.0, (0.2, 0.0), (0.0, -1.0)).unwrap(),
-            Body::new(100.0, (-0.4, 0.0), (0.0, -1.0)).unwrap(),
+            // Body::new(100.0, (0.2, 0.0), (0.0, -1.0)).unwrap(),
+            // Body::new(100.0, (-0.4, 0.0), (0.0, -1.0)).unwrap(),
         ];
 
         let quad_vertices: [[f32; 2]; 4] = [
