@@ -28,6 +28,7 @@ pub struct State<'a> {
     pub bodies: Vec<Body>,
     pub g_constant: f32,
     pub time_step: f32,
+    pub eps2: f32,
 }
 
 impl<'a> State<'a> {
@@ -226,6 +227,7 @@ impl<'a> State<'a> {
             bodies,
             g_constant: 1.0,
             time_step: 0.0001, // Small time step for accuracy
+            eps2: 0.004,
         })
     }
 
@@ -365,7 +367,11 @@ impl<'a> State<'a> {
         let mut forces_new = vec![(0.0, 0.0); n];
         for i in 0..n {
             for j in (i + 1)..n {
-                let f = self.bodies[i].gravitational_force(&self.bodies[j], self.g_constant);
+                let f = self.bodies[i].gravitational_force_softened(
+                    &self.bodies[j],
+                    self.g_constant,
+                    self.eps2,
+                );
                 forces_new[i].0 += f.0 / self.bodies[i].mass;
                 forces_new[i].1 += f.1 / self.bodies[i].mass;
                 forces_new[j].0 -= f.0 / self.bodies[j].mass;
@@ -400,20 +406,35 @@ impl Body {
         })
     }
 
+    pub fn gravitational_force(&self, other: &Body, gravity: f32) -> (f32, f32) {
+        let dx = other.position.0 - self.position.0;
+        let dy = other.position.1 - self.position.1;
+        let r2 = dx * dx + dy * dy;
+        let inv_r = r2.sqrt().recip();
+        let inv_r3 = inv_r * inv_r * inv_r;
+        let direct_force = gravity * self.mass * other.mass * inv_r3;
+        (direct_force * dx, direct_force * dy)
+    }
+
     pub fn distance_to(&self, other: &Body) -> f32 {
         let dx = self.position.0 - other.position.0;
         let dy = self.position.1 - other.position.1;
-        (dx * dx + dy * dy + self.radius * self.radius).sqrt()
+        (dx * dx + dy * dy).sqrt()
     }
 
-    pub fn gravitational_force(&self, other: &Body, gravity: f32) -> (f32, f32) {
-        let distance = self.distance_to(other);
-        let direct_force = gravity * self.mass * other.mass / (distance * distance);
+    pub fn gravitational_force_softened(
+        &self,
+        other: &Body,
+        gravity: f32,
+        eps2: f32,
+    ) -> (f32, f32) {
         let dx = other.position.0 - self.position.0;
         let dy = other.position.1 - self.position.1;
-        let fx = direct_force * dx / distance;
-        let fy = direct_force * dy / distance;
-        (fx, fy)
+        let r2 = dx * dx + dy * dy + eps2;
+        let inv_r = r2.sqrt().recip();
+        let inv_r3 = inv_r * inv_r * inv_r;
+        let direct_force = gravity * self.mass * other.mass * inv_r3;
+        (direct_force * dx, direct_force * dy)
     }
 
     pub fn update(&mut self, acceleration: (f32, f32), dt: f32) {
