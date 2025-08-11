@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use wgpu::{naga::valid::WidthError, Device, Instance, Queue, Surface};
+use wgpu::{Device, Instance, Queue, Surface};
 use winit::window::Window;
 
 #[cfg(target_arch = "wasm32")]
@@ -70,7 +70,7 @@ impl<'a> State<'a> {
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
 
-        let present_mode = if caps.present_modes.contains(wgpu::PresentMode::Fifo) {
+        let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
             wgpu::PresentMode::Fifo
         } else {
             caps.present_modes[0]
@@ -118,9 +118,57 @@ impl<'a> State<'a> {
     }
 
     pub fn render(&mut self) {
-        self.window.request_redraw();
+        let frame = match self.surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(wgpu::SurfaceError::Lost) => {
+                self.surface.configure(&self.device, &self.config);
+                return;
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                eprintln!("Surface out of memory");
+                std::process::exit(1);
+            }
+            Err(_) => {
+                // Just retry
+                return;
+            }
+        };
 
-        // Can add some rendering here later
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Clear Encoder"),
+            });
+
+        {
+            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.05,
+                            g: 0.05,
+                            b: 0.10,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+
+        self.window.request_redraw();
     }
 
     pub fn total_kinetic_energy(&self) -> f32 {
@@ -135,7 +183,8 @@ impl<'a> State<'a> {
             for j in (i + 1)..self.bodies.len() {
                 let distance = self.bodies[i].distance_to(&self.bodies[j]);
                 // U = -G * m1 * m2 / r
-                potential_energy -= self.g_constant * self.bodies[i].mass * self.bodies[j].mass / distance;
+                potential_energy -=
+                    self.g_constant * self.bodies[i].mass * self.bodies[j].mass / distance;
             }
         }
         potential_energy
@@ -157,15 +206,17 @@ impl<'a> State<'a> {
 
                 forces[i].0 += f.0 / self.bodies[i].mass;
                 forces[i].1 += f.1 / self.bodies[i].mass;
-                forces[j].0 -= f.0/ self.bodies[j].mass;
-                forces[j].1 -= f.1/ self.bodies[j].mass;
+                forces[j].0 -= f.0 / self.bodies[j].mass;
+                forces[j].1 -= f.1 / self.bodies[j].mass;
             }
         }
 
         // x(t+dt) = x(t) + v(t) dt + 0.5 a(t) dt^2
         for i in 0..n {
-            self.bodies[i].position.0 += self.bodies[i].velocity.0 * self.time_step + 0.5 * forces[i].0 * self.time_step * self.time_step;
-            self.bodies[i].position.1 += self.bodies[i].velocity.1 * self.time_step + 0.5 * forces[i].1 * self.time_step * self.time_step;
+            self.bodies[i].position.0 += self.bodies[i].velocity.0 * self.time_step
+                + 0.5 * forces[i].0 * self.time_step * self.time_step;
+            self.bodies[i].position.1 += self.bodies[i].velocity.1 * self.time_step
+                + 0.5 * forces[i].1 * self.time_step * self.time_step;
         }
 
         // a(t+dt)
@@ -179,7 +230,7 @@ impl<'a> State<'a> {
                 forces_new[j].1 -= f.1 / self.bodies[j].mass;
             }
         }
-        
+
         // v(t+dt) = v(t) + 0.5 (a(t) + a(t+dt)) dt
         for i in 0..n {
             self.bodies[i].velocity.0 += 0.5 * (forces[i].0 + forces_new[i].0) * self.time_step;
@@ -355,15 +406,17 @@ mod tests {
 
                     forces[i].0 += f.0 / bodies[i].mass;
                     forces[i].1 += f.1 / bodies[i].mass;
-                    forces[j].0 -= f.0/ bodies[j].mass;
-                    forces[j].1 -= f.1/ bodies[j].mass;
+                    forces[j].0 -= f.0 / bodies[j].mass;
+                    forces[j].1 -= f.1 / bodies[j].mass;
                 }
             }
 
             // x(t+dt) = x(t) + v(t) dt + 0.5 a(t) dt^2
             for i in 0..n {
-                bodies[i].position.0 += bodies[i].velocity.0 * time_step + 0.5 * forces[i].0 * time_step * time_step;
-                bodies[i].position.1 += bodies[i].velocity.1 * time_step + 0.5 * forces[i].1 * time_step * time_step;
+                bodies[i].position.0 +=
+                    bodies[i].velocity.0 * time_step + 0.5 * forces[i].0 * time_step * time_step;
+                bodies[i].position.1 +=
+                    bodies[i].velocity.1 * time_step + 0.5 * forces[i].1 * time_step * time_step;
             }
 
             // a(t+dt)
@@ -377,7 +430,7 @@ mod tests {
                     forces_new[j].1 -= f.1 / bodies[j].mass;
                 }
             }
-        
+
             // v(t+dt) = v(t) + 0.5 (a(t) + a(t+dt)) dt
             for i in 0..n {
                 bodies[i].velocity.0 += 0.5 * (forces[i].0 + forces_new[i].0) * time_step;
@@ -391,7 +444,10 @@ mod tests {
         // Total energy should be conserved (within numerical error)
         println!("Initial total energy: {initial_energy}, Final total energy: {final_energy}");
         println!("Final kinetic energy: {final_kinetic}");
-        println!("Total energy difference: {}", (final_energy - initial_energy).abs());
+        println!(
+            "Total energy difference: {}",
+            (final_energy - initial_energy).abs()
+        );
         assert!((final_energy - initial_energy).abs() < 0.01);
     }
 
@@ -425,15 +481,17 @@ mod tests {
 
                     forces[i].0 += f.0 / bodies[i].mass;
                     forces[i].1 += f.1 / bodies[i].mass;
-                    forces[j].0 -= f.0/ bodies[j].mass;
-                    forces[j].1 -= f.1/ bodies[j].mass;
+                    forces[j].0 -= f.0 / bodies[j].mass;
+                    forces[j].1 -= f.1 / bodies[j].mass;
                 }
             }
 
             // x(t+dt) = x(t) + v(t) dt + 0.5 a(t) dt^2
             for i in 0..n {
-                bodies[i].position.0 += bodies[i].velocity.0 * time_step + 0.5 * forces[i].0 * time_step * time_step;
-                bodies[i].position.1 += bodies[i].velocity.1 * time_step + 0.5 * forces[i].1 * time_step * time_step;
+                bodies[i].position.0 +=
+                    bodies[i].velocity.0 * time_step + 0.5 * forces[i].0 * time_step * time_step;
+                bodies[i].position.1 +=
+                    bodies[i].velocity.1 * time_step + 0.5 * forces[i].1 * time_step * time_step;
             }
 
             // a(t+dt)
@@ -447,7 +505,7 @@ mod tests {
                     forces_new[j].1 -= f.1 / bodies[j].mass;
                 }
             }
-        
+
             // v(t+dt) = v(t) + 0.5 (a(t) + a(t+dt)) dt
             for i in 0..n {
                 bodies[i].velocity.0 += 0.5 * (forces[i].0 + forces_new[i].0) * time_step;
@@ -459,7 +517,6 @@ mod tests {
             let (px, py) = b.get_linear_momentum();
             (sx + px, sy + py)
         });
-
 
         let p1: f32 = (px1 * px1 + py1 * py1).sqrt();
 
