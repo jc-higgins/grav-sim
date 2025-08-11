@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow = "1.0.98"
+bytemuck = "1.23.2"
 cfg-if = "1.0.1"
 env_logger = "0.11.8"
 log = "0.4.27"
