@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use wgpu::{Device, Instance, Queue, Surface};
+use wgpu::{naga::valid::WidthError, Device, Instance, Queue, Surface};
 use winit::window::Window;
 
 #[cfg(target_arch = "wasm32")]
@@ -11,6 +11,8 @@ pub struct State<'a> {
     pub window: Arc<Window>,
     pub instance: Instance,
     pub surface: Surface<'a>,
+    pub size: winit::dpi::PhysicalSize<u32>,
+    pub config: wgpu::SurfaceConfiguration,
     pub device: Device,
     pub queue: Queue,
     pub bodies: Vec<Body>,
@@ -59,10 +61,40 @@ impl<'a> State<'a> {
             }
         };
 
+        let size = window.inner_size();
+        let caps = surface.get_capabilities(&adapter);
+        let surface_format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+
+        let present_mode = if caps.present_modes.contains(wgpu::PresentMode::Fifo) {
+            wgpu::PresentMode::Fifo
+        } else {
+            caps.present_modes[0]
+        };
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        surface.configure(&device, &config);
+
         Ok(Self {
             window,
             instance,
             surface,
+            size,
+            config,
             device,
             queue,
             bodies: vec![
@@ -74,8 +106,15 @@ impl<'a> State<'a> {
         })
     }
 
-    pub fn resize(&mut self, _width: u32, _height: u32) {
-        //
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        self.size.width = width;
+        self.size.height = height;
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(&self.device, &self.config);
     }
 
     pub fn render(&mut self) {
