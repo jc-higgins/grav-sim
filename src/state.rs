@@ -101,11 +101,18 @@ impl<'a> State<'a> {
 
         // TODO: Replace with initial config loaded from file (or let the user provide them?)
         let bodies = vec![
-            Body::new(100.0, (-1.0, 0.0), (0.0, 1.0)).unwrap(),
-            Body::new(100.0, (1.0, 0.0), (0.0, -1.0)).unwrap(),
+            Body::new(100.0, (-0.8, 0.0), (0.0, 1.0)).unwrap(),
+            Body::new(100.0, (0.8, 0.0), (0.0, -1.0)).unwrap(),
+            Body::new(100.0, (0.2, 0.0), (0.0, -1.0)).unwrap(),
+            Body::new(100.0, (-0.4, 0.0), (0.0, -1.0)).unwrap(),
         ];
 
-        let quad_vertices: [[f32; 2]; 4] = [[-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0]];
+        let quad_vertices: [[f32; 2]; 4] = [
+            [-1.0, -1.0],
+            [ 1.0, -1.0],
+            [ 1.0,  1.0],
+            [-1.0,  1.0],
+          ];        
         let quad_indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
 
         let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -132,35 +139,12 @@ impl<'a> State<'a> {
         let num_instances = instance_data.len() as u32;
 
         // RENDER
-        // TODO: rewrite from scratch to understand the shaders
-        let shader_src = r#"
-            struct VsIn {
-                @location(0) local_pos: vec2f;     // quad vertex [-1,1]
-                @location(1) instance_pos: vec2f;  // body center in clip space
-            };
-            struct VsOut {
-                @builtin(position) pos: vec4f;
-                @location(0) uv: vec2f;            // pass local_pos to fragment
-            };
-
-            @vertex
-            fn vs(in: VsIn) -> VsOut {
-                var out: VsOut;
-                let radius = 0.02; // tweak size
-                let pos = in.instance_pos + in.local_pos * radius;
-                out.pos = vec4f(pos, 0.0, 1.0);
-                out.uv = in.local_pos;
-                return out;
-            }
-
-            @fragment
-            fn fs(in: VsOut) -> @location(0) vec4f {
-                // circle mask in the quad
-                let r = length(in.uv);
-                if (r > 1.0) { discard; }
-                return vec4f(0.9, 0.9, 0.9, 1.0);
-            }
-        "#;
+        // TODO: rewrite from scratch to understand the shaders better
+        // Hot reload when not compiling to wasm
+        #[cfg(not(target_arch = "wasm32"))]
+        let shader_src = &std::fs::read_to_string("src/shaders/bodies.wgsl").expect("read bodies.wgsl");
+        #[cfg(target_arch = "wasm32")]
+        let shader_src = include_str!("shaders/bodies.wgsl");
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Bodies Shader"),
