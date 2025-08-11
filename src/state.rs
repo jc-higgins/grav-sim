@@ -101,18 +101,13 @@ impl<'a> State<'a> {
 
         // TODO: Replace with initial config loaded from file (or let the user provide them?)
         let bodies = vec![
-            Body::new(100.0, (-0.8, 0.0), (0.0, 1.0)).unwrap(),
-            Body::new(100.0, (0.8, 0.0), (0.0, -1.0)).unwrap(),
-            // Body::new(100.0, (0.2, 0.0), (0.0, -1.0)).unwrap(),
-            // Body::new(100.0, (-0.4, 0.0), (0.0, -1.0)).unwrap(),
+            Body::new(200.0, (-0.8, 0.0), (0.0, 1.0)).unwrap(),
+            Body::new(100.0, (0.8, 0.0), (0.0, 1.0)).unwrap(),
+            Body::new(100.0, (0.2, 0.0), (0.0, -1.0)).unwrap(),
+            Body::new(50.0, (-0.3, 0.0), (0.0, 1.0)).unwrap(),
         ];
 
-        let quad_vertices: [[f32; 2]; 4] = [
-            [-1.0, -1.0],
-            [ 1.0, -1.0],
-            [ 1.0,  1.0],
-            [-1.0,  1.0],
-          ];        
+        let quad_vertices: [[f32; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
         let quad_indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
 
         let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -142,7 +137,8 @@ impl<'a> State<'a> {
         // TODO: rewrite from scratch to understand the shaders better
         // Hot reload when not compiling to wasm
         #[cfg(not(target_arch = "wasm32"))]
-        let shader_src = &std::fs::read_to_string("src/shaders/bodies.wgsl").expect("read bodies.wgsl");
+        let shader_src =
+            &std::fs::read_to_string("src/shaders/bodies.wgsl").expect("read bodies.wgsl");
         #[cfg(target_arch = "wasm32")]
         let shader_src = include_str!("shaders/bodies.wgsl");
 
@@ -395,7 +391,7 @@ pub struct Body {
 
 impl Body {
     pub fn new(mass: f32, position: (f32, f32), velocity: (f32, f32)) -> Result<Self> {
-        let radius: f32 = 1.0;
+        let radius: f32 = 0.02;
         Ok(Self {
             mass,
             position,
@@ -407,7 +403,7 @@ impl Body {
     pub fn distance_to(&self, other: &Body) -> f32 {
         let dx = self.position.0 - other.position.0;
         let dy = self.position.1 - other.position.1;
-        (dx * dx + dy * dy).sqrt()
+        (dx * dx + dy * dy + self.radius * self.radius).sqrt()
     }
 
     pub fn gravitational_force(&self, other: &Body, gravity: f32) -> (f32, f32) {
