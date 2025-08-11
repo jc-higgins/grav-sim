@@ -1,20 +1,30 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use wgpu::{Device, Instance, Queue, Surface};
+use wgpu::{Device, Instance, Queue, Surface, util::DeviceExt};
 use winit::window::Window;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 pub struct State<'a> {
+    // Window
     pub window: Arc<Window>,
     pub instance: Instance,
     pub surface: Surface<'a>,
     pub size: winit::dpi::PhysicalSize<u32>,
     pub config: wgpu::SurfaceConfiguration,
+
+    // GPU
     pub device: Device,
     pub queue: Queue,
+    pub render_pipeline: wgpu::RenderPipeline,
+    pub quad_vertex_buffer: wgpu::Buffer,
+    pub quad_index_buffer: wgpu::Buffer,
+    pub instance_buffer: wgpu::Buffer,
+    pub num_instances: u32,
+
+    // Gravity Sim
     pub bodies: Vec<Body>,
     pub g_constant: f32,
     pub time_step: f32,
@@ -89,18 +99,151 @@ impl<'a> State<'a> {
 
         surface.configure(&device, &config);
 
+        // TODO: Replace with initial config loaded from file (or let the user provide them?)
+        let bodies = vec![
+            Body::new(100.0, (-1.0, 0.0), (0.0, 1.0)).unwrap(),
+            Body::new(100.0, (1.0, 0.0), (0.0, -1.0)).unwrap(),
+        ];
+
+        let quad_vertices: [[f32; 2]; 4] = [[-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0]];
+        let quad_indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+
+        let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Quad VB"),
+            contents: bytemuck::cast_slice(&quad_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let quad_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Quad IB"),
+            contents: bytemuck::cast_slice(&quad_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let instance_data: Vec<[f32; 2]> = bodies
+            .iter()
+            .map(|b| [b.position.0, b.position.1])
+            .collect();
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+        let num_instances = instance_data.len() as u32;
+
+        // RENDER
+        // TODO: rewrite from scratch to understand the shaders
+        let shader_src = r#"
+            struct VsIn {
+                @location(0) local_pos: vec2f;     // quad vertex [-1,1]
+                @location(1) instance_pos: vec2f;  // body center in clip space
+            };
+            struct VsOut {
+                @builtin(position) pos: vec4f;
+                @location(0) uv: vec2f;            // pass local_pos to fragment
+            };
+
+            @vertex
+            fn vs(in: VsIn) -> VsOut {
+                var out: VsOut;
+                let radius = 0.02; // tweak size
+                let pos = in.instance_pos + in.local_pos * radius;
+                out.pos = vec4f(pos, 0.0, 1.0);
+                out.uv = in.local_pos;
+                return out;
+            }
+
+            @fragment
+            fn fs(in: VsOut) -> @location(0) vec4f {
+                // circle mask in the quad
+                let r = length(in.uv);
+                if (r > 1.0) { discard; }
+                return vec4f(0.9, 0.9, 0.9, 1.0);
+            }
+        "#;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Bodies Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+        });
+
+        let vertex_buffers = &[
+            // slot 0: quad vertices (per-vertex)
+            wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 2]>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                }],
+            },
+            wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 2]>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                }],
+            },
+        ];
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Bodies Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Bodies Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Ok(Self {
             window,
             instance,
             surface,
             size,
             config,
+
+            // GPU
             device,
             queue,
-            bodies: vec![
-                Body::new(100.0, (-1.0, 0.0), (0.0, 1.0)).unwrap(),
-                Body::new(100.0, (1.0, 0.0), (0.0, -1.0)).unwrap(),
-            ],
+            render_pipeline,
+            quad_vertex_buffer,
+            quad_index_buffer,
+            instance_buffer,
+            num_instances,
+
+            // Grav Sim
+            bodies,
             g_constant: 1.0,
             time_step: 0.0001, // Small time step for accuracy
         })
@@ -134,6 +277,18 @@ impl<'a> State<'a> {
             }
         };
 
+        let instance_data: Vec<[f32; 2]> = self
+            .bodies
+            .iter()
+            .map(|b| [b.position.0, b.position.1])
+            .collect();
+        self.queue.write_buffer(
+            &self.instance_buffer,
+            0,
+            bytemuck::cast_slice(&instance_data),
+        );
+        self.num_instances = instance_data.len() as u32;
+
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -143,27 +298,34 @@ impl<'a> State<'a> {
                 label: Some("Clear Encoder"),
             });
 
-        {
-            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.10,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-        }
+        // Render Pass
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Clear + Draw"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.05,
+                        g: 0.05,
+                        b: 0.10,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+
+        rpass.set_pipeline(&self.render_pipeline);
+        rpass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+        rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        rpass.set_index_buffer(self.quad_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
+        rpass.draw_indexed(0..6, 0, 0..self.num_instances);
+        drop(rpass);
 
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
