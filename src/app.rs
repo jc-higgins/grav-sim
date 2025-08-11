@@ -1,33 +1,36 @@
-use std::sync::Arc;
 use pollster;
+use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, WindowEvent};
-use winit::event_loop::{ActiveEventLoop};
+use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowId, WindowAttributes};
+use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::state::State;
 
-
 pub struct App {
-    pub state: Option<State>,
+    pub state: Option<State<'static>>,
 }
 
 impl App {
     pub fn new() -> Self {
-        Self {
-            state: None
-        }
+        Self { state: None }
     }
 }
 
-impl ApplicationHandler<State> for App {
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         #[allow(unused_mut)]
         let mut window_attributes: WindowAttributes = Window::default_attributes();
 
         window_attributes = window_attributes.with_title("Learning WGPU!");
-        
+
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
         #[cfg(target_arch = "wasm32")]
@@ -50,16 +53,6 @@ impl ApplicationHandler<State> for App {
         }
 
         self.state = Some(pollster::block_on(State::new(window)).unwrap());
-    }
-
-    #[allow(unused_mut)]
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: State) {
-        event.window.request_redraw();
-        event.resize(
-            event.window.inner_size().width,
-            event.window.inner_size().height,
-        );
-        self.state = Some(event);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -86,10 +79,12 @@ impl ApplicationHandler<State> for App {
                 // Keyboard presses
             } => match (code, state.is_pressed()) {
                 (KeyCode::Escape, true) => event_loop.exit(),
+                (KeyCode::Tab, true) => {
+                    self.state.as_mut().unwrap().step();
+                },
                 _ => {}
             },
             _ => {}
         }
     }
 }
-

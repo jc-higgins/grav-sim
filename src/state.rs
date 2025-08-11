@@ -1,30 +1,76 @@
-use std::sync::Arc;
 use anyhow::Result;
+use std::sync::Arc;
 
-use winit::{
-    window::Window,
-};
+use wgpu::{Device, Instance, Queue, Surface};
+use winit::window::Window;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-pub struct State {
+pub struct State<'a> {
     pub window: Arc<Window>,
+    pub instance: Instance,
+    pub surface: Surface<'a>,
+    pub device: Device,
+    pub queue: Queue,
     pub bodies: Vec<Body>,
     pub g_constant: f32,
     pub time_step: f32,
 }
 
-impl State {
+impl<'a> State<'a> {
     pub async fn new(window: Arc<Window>) -> Result<Self> {
+        // Create an instance to interact with the GPU
+        let instance_descriptor = wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        };
+        let instance = wgpu::Instance::new(&instance_descriptor);
+
+        // Create a surface to render to
+        let surface = instance.create_surface(window.clone()).unwrap();
+
+        // Request an adapter + device to
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .unwrap();
+
+        let (device, queue) = match adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("GPU"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                },
+                None,
+            )
+            .await
+        {
+            Ok((device, queue)) => (device, queue),
+            Err(e) => {
+                eprintln!("Error requesting device: {e:?}");
+                std::process::exit(1);
+            }
+        };
+
         Ok(Self {
             window,
+            instance,
+            surface,
+            device,
+            queue,
             bodies: vec![
                 Body::new(100.0, (-1.0, 0.0), (0.0, 1.0)).unwrap(),
                 Body::new(100.0, (1.0, 0.0), (0.0, -1.0)).unwrap(),
             ],
             g_constant: 1.0,
-            time_step: 0.001, // Small time step for accuracy
+            time_step: 0.0001, // Small time step for accuracy
         })
     }
 
@@ -38,29 +84,67 @@ impl State {
         // Can add some rendering here later
     }
 
-    pub fn total_kinetic_energy(&self) -> f32{
-        self.bodies.iter().fold(0.0, |s, x| s + x.get_kinetic_energy())
+    pub fn total_kinetic_energy(&self) -> f32 {
+        self.bodies
+            .iter()
+            .fold(0.0, |s, x| s + x.get_kinetic_energy())
+    }
+
+    pub fn total_potential_energy(&self) -> f32 {
+        let mut potential_energy = 0.0;
+        for i in 0..self.bodies.len() {
+            for j in (i + 1)..self.bodies.len() {
+                let distance = self.bodies[i].distance_to(&self.bodies[j]);
+                // U = -G * m1 * m2 / r
+                potential_energy -= self.g_constant * self.bodies[i].mass * self.bodies[j].mass / distance;
+            }
+        }
+        potential_energy
+    }
+
+    pub fn total_energy(&self) -> f32 {
+        self.total_kinetic_energy() + self.total_potential_energy()
     }
 
     pub fn step(&mut self) {
         // 1. Pairwise forces
-        let mut forces = vec![(0.0, 0.0); self.bodies.len()];
+        let n = self.bodies.len();
+        let mut forces = vec![(0.0, 0.0); n];
 
-        for i in 0..self.bodies.len() {
-            for j in (i+1)..self.bodies.len() {
-                let force_ij = self.bodies[i].gravitational_force(&self.bodies[j], self.g_constant);
-                let force_ji = (-force_ij.0, -force_ij.1);
+        // a(t)
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let f = self.bodies[i].gravitational_force(&self.bodies[j], self.g_constant);
 
-                forces[i].0 += force_ij.0;
-                forces[i].1 += force_ij.1;
-                forces[j].0 += force_ji.0;
-                forces[j].1 += force_ji.1;
+                forces[i].0 += f.0 / self.bodies[i].mass;
+                forces[i].1 += f.1 / self.bodies[i].mass;
+                forces[j].0 -= f.0/ self.bodies[j].mass;
+                forces[j].1 -= f.1/ self.bodies[j].mass;
             }
         }
 
-        for (i, body) in self.bodies.iter_mut().enumerate() {
-            let acceleration = (forces[i].0 / body.mass, forces[i].1 / body.mass);
-            body.update(acceleration, self.time_step);
+        // x(t+dt) = x(t) + v(t) dt + 0.5 a(t) dt^2
+        for i in 0..n {
+            self.bodies[i].position.0 += self.bodies[i].velocity.0 * self.time_step + 0.5 * forces[i].0 * self.time_step * self.time_step;
+            self.bodies[i].position.1 += self.bodies[i].velocity.1 * self.time_step + 0.5 * forces[i].1 * self.time_step * self.time_step;
+        }
+
+        // a(t+dt)
+        let mut forces_new = vec![(0.0, 0.0); n];
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let f = self.bodies[i].gravitational_force(&self.bodies[j], self.g_constant);
+                forces_new[i].0 += f.0 / self.bodies[i].mass;
+                forces_new[i].1 += f.1 / self.bodies[i].mass;
+                forces_new[j].0 -= f.0 / self.bodies[j].mass;
+                forces_new[j].1 -= f.1 / self.bodies[j].mass;
+            }
+        }
+        
+        // v(t+dt) = v(t) + 0.5 (a(t) + a(t+dt)) dt
+        for i in 0..n {
+            self.bodies[i].velocity.0 += 0.5 * (forces[i].0 + forces_new[i].0) * self.time_step;
+            self.bodies[i].velocity.1 += 0.5 * (forces[i].1 + forces_new[i].1) * self.time_step;
         }
     }
 }
@@ -76,7 +160,12 @@ pub struct Body {
 impl Body {
     pub fn new(mass: f32, position: (f32, f32), velocity: (f32, f32)) -> Result<Self> {
         let radius: f32 = 1.0;
-        Ok(Self { mass, position, velocity, radius })
+        Ok(Self {
+            mass,
+            position,
+            velocity,
+            radius,
+        })
     }
 
     pub fn distance_to(&self, other: &Body) -> f32 {
@@ -103,111 +192,157 @@ impl Body {
     }
 
     pub fn get_kinetic_energy(&self) -> f32 {
-        ((self.velocity.0 * self.velocity.0) + (self.velocity.1 * self.velocity.1)).sqrt() * self.mass
+        0.5 * self.mass * (self.velocity.0 * self.velocity.0 + self.velocity.1 * self.velocity.1)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_body_creation() {
         let body = Body::new(100.0, (0.0, 0.0), (1.0, 0.0)).unwrap();
-        
+
         assert_eq!(body.mass, 100.0);
         assert_eq!(body.position, (0.0, 0.0));
         assert_eq!(body.velocity, (1.0, 0.0));
         // Test that radius was calculated (adjust based on your formula)
         assert!(body.radius > 0.0);
     }
-    
+
     #[test]
     fn test_distance_calculation() {
         let body1 = Body::new(1.0, (0.0, 0.0), (0.0, 0.0)).unwrap();
         let body2 = Body::new(1.0, (3.0, 4.0), (0.0, 0.0)).unwrap();
-        
+
         let distance = body1.distance_to(&body2);
         assert!((distance - 5.0).abs() < 1e-6); // 3-4-5 triangle (using f32 precision)
     }
-    
+
     #[test]
     fn test_gravitational_force_symmetry() {
         let body1 = Body::new(100.0, (0.0, 0.0), (0.0, 0.0)).unwrap();
         let body2 = Body::new(200.0, (1.0, 0.0), (0.0, 0.0)).unwrap();
         let g = 1.0; // Simplified constant
-        
+
         let force_12 = body1.gravitational_force(&body2, g);
         let force_21 = body2.gravitational_force(&body1, g);
-        
+
         // Forces should be equal and opposite (Newton's third law)
         assert!((force_12.0 + force_21.0).abs() < 1e-10);
         assert!((force_12.1 + force_21.1).abs() < 1e-10);
     }
-    
+
     #[test]
     fn test_gravitational_force_magnitude() {
         let body1 = Body::new(100.0, (0.0, 0.0), (0.0, 0.0)).unwrap();
         let body2 = Body::new(200.0, (2.0, 0.0), (0.0, 0.0)).unwrap();
         let g = 1.0;
-        
+
         let force = body1.gravitational_force(&body2, g);
-        
+
         // F = G * m1 * m2 / r^2 = 1 * 100 * 200 / 4 = 5000
         let expected_magnitude = 5000.0;
         let actual_magnitude = (force.0 * force.0 + force.1 * force.1).sqrt();
-        
+
         assert!((actual_magnitude - expected_magnitude).abs() < 1e-10);
-        
+
         // Force should point in positive x direction (toward body2)
         assert!(force.0 > 0.0);
         assert!(force.1.abs() < 1e-10);
     }
-    
+
     #[test]
     fn test_body_update() {
         let mut body = Body::new(1.0, (0.0, 0.0), (0.0, 0.0)).unwrap();
         let acceleration = (2.0, 1.0);
         let dt = 1.0;
-        
+
         body.update(acceleration, dt);
-        
+
         // After 1 second with acceleration (2, 1):
         // velocity = (0, 0) + (2, 1) * 1 = (2, 1)
         // position = (0, 0) + (2, 1) * 1 = (2, 1)
         assert_eq!(body.velocity, (2.0, 1.0));
         assert_eq!(body.position, (2.0, 1.0));
     }
-    
+
     #[test]
-    #[ignore = "Requires window system - run with 'cargo test -- --ignored'"]
     fn test_energy_conservation_two_body() {
-        // Create a real window for testing (may fail in headless environments)
-        use winit::event_loop::EventLoop;
-        let event_loop = EventLoop::new().unwrap();
-        let window = Arc::new(event_loop.create_window(winit::window::Window::default_attributes()).unwrap());
-        
-        let mut state = State {
-            window,
-            bodies: vec![
-                Body::new(100.0, (-1.0, 0.0), (0.0, 1.0)).unwrap(),
-                Body::new(100.0, (1.0, 0.0), (0.0, -1.0)).unwrap(),
-            ],
-            g_constant: 1.0,
-            time_step: 0.001, // Small time step for accuracy
+        // Create a minimal state for testing (no GPU resources needed)
+        let mut bodies = vec![
+            Body::new(100.0, (-1.0, 0.0), (0.0, 1.0)).unwrap(),
+            Body::new(100.0, (1.0, 0.0), (0.0, -1.0)).unwrap(),
+        ];
+        let g_constant = 1.0;
+        let time_step = 0.0001;
+
+        // Calculate total energy (kinetic + potential)
+        let calculate_total_energy = |bodies: &[Body]| -> f32 {
+            let kinetic: f32 = bodies.iter().map(|b| b.get_kinetic_energy()).sum();
+            let mut potential = 0.0;
+            for i in 0..bodies.len() {
+                for j in (i + 1)..bodies.len() {
+                    let distance = bodies[i].distance_to(&bodies[j]);
+                    potential -= g_constant * bodies[i].mass * bodies[j].mass / distance;
+                }
+            }
+            kinetic + potential
         };
-        
-        let initial_energy = state.total_kinetic_energy();
-        
+
+        let initial_energy = calculate_total_energy(&bodies);
+
         // Run a few simulation steps
         for _ in 0..10 {
-            state.step();
+            // 1. Pairwise forces
+            let n = bodies.len();
+            let mut forces = vec![(0.0, 0.0); n];
+
+            // a(t)
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let f = bodies[i].gravitational_force(&bodies[j], g_constant);
+
+                    forces[i].0 += f.0 / bodies[i].mass;
+                    forces[i].1 += f.1 / bodies[i].mass;
+                    forces[j].0 -= f.0/ bodies[j].mass;
+                    forces[j].1 -= f.1/ bodies[j].mass;
+                }
+            }
+
+            // x(t+dt) = x(t) + v(t) dt + 0.5 a(t) dt^2
+            for i in 0..n {
+                bodies[i].position.0 += bodies[i].velocity.0 * time_step + 0.5 * forces[i].0 * time_step * time_step;
+                bodies[i].position.1 += bodies[i].velocity.1 * time_step + 0.5 * forces[i].1 * time_step * time_step;
+            }
+
+            // a(t+dt)
+            let mut forces_new = vec![(0.0, 0.0); n];
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let f = bodies[i].gravitational_force(&bodies[j], g_constant);
+                    forces_new[i].0 += f.0 / bodies[i].mass;
+                    forces_new[i].1 += f.1 / bodies[i].mass;
+                    forces_new[j].0 -= f.0 / bodies[j].mass;
+                    forces_new[j].1 -= f.1 / bodies[j].mass;
+                }
+            }
+        
+            // v(t+dt) = v(t) + 0.5 (a(t) + a(t+dt)) dt
+            for i in 0..n {
+                bodies[i].velocity.0 += 0.5 * (forces[i].0 + forces_new[i].0) * time_step;
+                bodies[i].velocity.1 += 0.5 * (forces[i].1 + forces_new[i].1) * time_step;
+            }
         }
-        
-        let final_energy = state.total_kinetic_energy();
-        
-        // Energy should be approximately conserved (within numerical error)
-        // Note: This is a simple test - real energy conservation would include potential energy
-        assert!((final_energy - initial_energy).abs() < 0.1);
+
+        let final_energy = calculate_total_energy(&bodies);
+        let final_kinetic: f32 = bodies.iter().map(|b| b.get_kinetic_energy()).sum();
+
+        // Total energy should be conserved (within numerical error)
+        println!("Initial total energy: {initial_energy}, Final total energy: {final_energy}");
+        println!("Final kinetic energy: {final_kinetic}");
+        println!("Total energy difference: {}", (final_energy - initial_energy).abs());
+        assert!((final_energy - initial_energy).abs() < 0.01);
     }
 }

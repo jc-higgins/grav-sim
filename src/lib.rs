@@ -4,9 +4,9 @@ pub mod app;
 pub mod state;
 
 pub use app::App;
-pub use state::{State, Body};
+pub use state::{Body, State};
 
-use winit::event_loop::{EventLoop};
+use winit::event_loop::EventLoop;
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
@@ -22,8 +22,7 @@ pub fn run() {
         }
     }
 
-    let event_loop = EventLoop::<State>::with_user_event().build().unwrap();
+    let event_loop = EventLoop::new().unwrap();
     let mut app = App::new();
     let _ = event_loop.run_app(&mut app);
 }
- 
