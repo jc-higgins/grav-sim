@@ -194,6 +194,10 @@ impl Body {
     pub fn get_kinetic_energy(&self) -> f32 {
         0.5 * self.mass * (self.velocity.0 * self.velocity.0 + self.velocity.1 * self.velocity.1)
     }
+
+    pub fn get_linear_momentum(&self) -> (f32, f32) {
+        (self.mass * self.velocity.0, self.mass * self.velocity.1)
+    }
 }
 
 #[cfg(test)]
@@ -266,6 +270,12 @@ mod tests {
         // position = (0, 0) + (2, 1) * 1 = (2, 1)
         assert_eq!(body.velocity, (2.0, 1.0));
         assert_eq!(body.position, (2.0, 1.0));
+    }
+
+    #[test]
+    fn test_get_momentum() {
+        let body = Body::new(1.0, (0.0, 0.0), (1.0, 0.0)).unwrap();
+        assert_eq!(body.get_linear_momentum(), (1.0, 0.0));
     }
 
     #[test]
@@ -344,5 +354,79 @@ mod tests {
         println!("Final kinetic energy: {final_kinetic}");
         println!("Total energy difference: {}", (final_energy - initial_energy).abs());
         assert!((final_energy - initial_energy).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_momentum_conservation_two_body() {
+        // Create a minimal state for testing (no GPU resources needed)
+        let mut bodies = vec![
+            Body::new(100.0, (-1.0, 0.0), (0.0, 1.0)).unwrap(),
+            Body::new(100.0, (1.0, 0.0), (0.0, -1.0)).unwrap(),
+        ];
+        let g_constant = 1.0;
+        let time_step = 0.0001;
+
+        let (px0, py0) = bodies.iter().fold((0.0, 0.0), |(sx, sy), b| {
+            let (px, py) = b.get_linear_momentum();
+            (sx + px, sy + py)
+        });
+
+        let p0 = (px0 * px0 + py0 * py0).sqrt();
+
+        // Run a few simulation steps
+        for _ in 0..10 {
+            // 1. Pairwise forces
+            let n = bodies.len();
+            let mut forces = vec![(0.0, 0.0); n];
+
+            // a(t)
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let f = bodies[i].gravitational_force(&bodies[j], g_constant);
+
+                    forces[i].0 += f.0 / bodies[i].mass;
+                    forces[i].1 += f.1 / bodies[i].mass;
+                    forces[j].0 -= f.0/ bodies[j].mass;
+                    forces[j].1 -= f.1/ bodies[j].mass;
+                }
+            }
+
+            // x(t+dt) = x(t) + v(t) dt + 0.5 a(t) dt^2
+            for i in 0..n {
+                bodies[i].position.0 += bodies[i].velocity.0 * time_step + 0.5 * forces[i].0 * time_step * time_step;
+                bodies[i].position.1 += bodies[i].velocity.1 * time_step + 0.5 * forces[i].1 * time_step * time_step;
+            }
+
+            // a(t+dt)
+            let mut forces_new = vec![(0.0, 0.0); n];
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let f = bodies[i].gravitational_force(&bodies[j], g_constant);
+                    forces_new[i].0 += f.0 / bodies[i].mass;
+                    forces_new[i].1 += f.1 / bodies[i].mass;
+                    forces_new[j].0 -= f.0 / bodies[j].mass;
+                    forces_new[j].1 -= f.1 / bodies[j].mass;
+                }
+            }
+        
+            // v(t+dt) = v(t) + 0.5 (a(t) + a(t+dt)) dt
+            for i in 0..n {
+                bodies[i].velocity.0 += 0.5 * (forces[i].0 + forces_new[i].0) * time_step;
+                bodies[i].velocity.1 += 0.5 * (forces[i].1 + forces_new[i].1) * time_step;
+            }
+        }
+
+        let (px1, py1) = bodies.iter().fold((0.0, 0.0), |(sx, sy), b| {
+            let (px, py) = b.get_linear_momentum();
+            (sx + px, sy + py)
+        });
+
+
+        let p1: f32 = (px1 * px1 + py1 * py1).sqrt();
+
+        // Total energy should be conserved (within numerical error)
+        println!("Initial momentum: {p0}, Final momentum: {p1}");
+        println!("Total energy difference: {}", (p1 - p0).abs());
+        assert!((p1 - p0).abs() < 0.01);
     }
 }
